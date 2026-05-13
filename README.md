@@ -126,53 +126,53 @@ Kernel Time : 484.525 ms
 GFLOPS: 4.43214
 ==PROF== Disconnected from process 84845
 [84845] naive@127.0.0.1
-	matmul_naive(int, int, int, float, const float *, const float *, float, float *) (64, 64, 1)x(16, 16, 1), Context 1, Stream 7, Device 0, CC 8.9
-		Section: GPU Speed Of Light Throughput
-		----------------------- ------------- -------------
-		Metric Name               Metric Unit  Metric Value
-		----------------------- ------------- -------------
-		DRAM Frequency          cycle/nsecond          7.99
-		SM Frequency            cycle/nsecond          1.54
-		Elapsed Cycles                  cycle    24,150,253
-		Memory Throughput                   %         98.62
-		DRAM Throughput                     %          0.42
-		Duration                      msecond         15.64
-		L1/TEX Cache Throughput             %         98.87
-		L2 Cache Throughput                 %          4.88
-		SM Active Cycles                cycle 24,091,127.96
-		Compute (SM) Throughput             %         23.20
+  matmul_naive(int, int, int, float, const float *, const float *, float, float *) (64, 64, 1)x(16, 16, 1), Context 1, Stream 7, Device 0, CC 8.9
+    Section: GPU Speed Of Light Throughput
+    ----------------------- ------------- -------------
+    Metric Name               Metric Unit  Metric Value
+    ----------------------- ------------- -------------
+    DRAM Frequency          cycle/nsecond          7.99
+    SM Frequency            cycle/nsecond          1.54
+    Elapsed Cycles                  cycle    24,150,253
+    Memory Throughput                   %         98.62
+    DRAM Throughput                     %          0.42
+    Duration                      msecond         15.64
+    L1/TEX Cache Throughput             %         98.87
+    L2 Cache Throughput                 %          4.88
+    SM Active Cycles                cycle 24,091,127.96
+    Compute (SM) Throughput             %         23.20
 
-		INF   The kernel is utilizing greater than 80.0% of the available compute or memory performance of the device. To   
-					further improve performance, work will likely need to be shifted from the most utilized to another unit.      
-					Start by analyzing L1 in the Memory Workload Analysis section.                                                
+    INF   The kernel is utilizing greater than 80.0% of the available compute or memory performance of the device. To   
+          further improve performance, work will likely need to be shifted from the most utilized to another unit.      
+          Start by analyzing L1 in the Memory Workload Analysis section.                                                
 
-		Section: Launch Statistics
-		-------------------------------- --------------- ---------------
-		Metric Name                          Metric Unit        Metric Value
-		-------------------------------- --------------- ---------------
-		Block Size                                                   256
-		Function Cache Configuration                     CachePreferNone
-		Grid Size                                                  4,096
-		Registers Per Thread             register/thread              36
-		Shared Memory Configuration Size           Kbyte           16.38
-		Driver Shared Memory Per Block       Kbyte/block            1.02
-		Dynamic Shared Memory Per Block       byte/block               0
-		Static Shared Memory Per Block        byte/block               0
-		Threads                                   thread       1,048,576
-		Waves Per SM                                               28.44
+    Section: Launch Statistics
+    -------------------------------- --------------- ---------------
+    Metric Name                          Metric Unit        Metric Value
+    -------------------------------- --------------- ---------------
+    Block Size                                                   256
+    Function Cache Configuration                     CachePreferNone
+    Grid Size                                                  4,096
+    Registers Per Thread             register/thread              36
+    Shared Memory Configuration Size           Kbyte           16.38
+    Driver Shared Memory Per Block       Kbyte/block            1.02
+    Dynamic Shared Memory Per Block       byte/block               0
+    Static Shared Memory Per Block        byte/block               0
+    Threads                                   thread       1,048,576
+    Waves Per SM                                               28.44
 
-		Section: Occupancy
-		------------------------------- ----------- ------------
-		Metric Name                     Metric Unit Metric Value
-		------------------------------- ----------- ------------
-		Block Limit SM                        block           24
-		Block Limit Registers                 block            6
-		Block Limit Shared Mem                block           16
-		Block Limit Warps                     block            6
-		Theoretical Active Warps per SM        warp           48
-		Theoretical Occupancy                     %          100
-		Achieved Occupancy                        %        98.81
-		Achieved Active Warps Per SM           warp        47.43
+    Section: Occupancy
+    ------------------------------- ----------- ------------
+    Metric Name                     Metric Unit Metric Value
+    ------------------------------- ----------- ------------
+    Block Limit SM                        block           24
+    Block Limit Registers                 block            6
+    Block Limit Shared Mem                block           16
+    Block Limit Warps                     block            6
+    Theoretical Active Warps per SM        warp           48
+    Theoretical Occupancy                     %          100
+    Achieved Occupancy                        %        98.81
+    Achieved Active Warps Per SM           warp        47.43
 
 		INF   This kernel's theoretical occupancy is not impacted by any block limit.
 ```
