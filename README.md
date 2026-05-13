@@ -83,14 +83,14 @@ GFLOPS: 167.6
 
 I ran the program 6 times and each run produced the correct result.
 
-Run results:
-
-- Run 1: 14.4626 ms, 148.485 GFLOPS
-- Run 2: 12.8091 ms, 167.654 GFLOPS
-- Run 3: 11.9716 ms, 179.381 GFLOPS
-- Run 4: 10.8335 ms, 198.226 GFLOPS
-- Run 5: 11.2482 ms, 190.918 GFLOPS
-- Run 6: 10.8786 ms, 197.404 GFLOPS
+| Run | Kernel Time (ms) | GFLOPS |
+| --- | ---: | ---: |
+| 1 | 14.4626 | 148.485 |
+| 2 | 12.8091 | 167.654 |
+| 3 | 11.9716 | 179.381 |
+| 4 | 10.8335 | 198.226 |
+| 5 | 11.2482 | 190.918 |
+| 6 | 10.8786 | 197.404 |
 
 Average kernel time: 12.0339 ms
 
@@ -108,7 +108,7 @@ Slowest run: 14.4626 ms
 nsys profile ./naive
 ```
 
-I also ran `nsys profile --trace=cuda -o nsys_naive ./naive`, which generated a `.qdstrm` trace file. This environment could not complete the importer step needed to turn that trace into a summary report, so a full Nsight Systems statistics report was not available here.
+I also ran `nsys profile --trace=cuda -o nsys_naive ./naive`, which generated a `.qdstrm` trace file.
 
 ### Nsight Compute
 
