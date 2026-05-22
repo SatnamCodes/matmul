@@ -162,6 +162,23 @@ For threads `0..31` in a warp:
 
 The math is still simple, but the memory access pattern is better.
 
+## Short Manim Explainer
+
+File: [side_by_side_kernels_manim.py](side_by_side_kernels_manim.py)
+
+This is a compact, under-one-minute beginner animation that puts both kernels
+side by side:
+
+- naive mapping: warp lanes touch strided rows of `C`
+- coalesced mapping: warp lanes touch neighboring columns of `C`
+- takeaway: same GEMM math, better memory access pattern
+
+Render it with:
+
+```bash
+manim -pql side_by_side_kernels_manim.py SideBySideKernels
+```
+
 ### Build And Run
 
 ```bash
