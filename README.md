@@ -318,7 +318,7 @@ because values in the staged tiles are reused by multiple threads in the block.
 ### Build And Run
 
 ```bash
-nvcc -O3 matmul_smem.cu -o matmul_smem
+nvcc -O3 -arch=sm_89 matmul_smem.cu -o matmul_smem
 ./matmul_smem
 ```
 
@@ -326,49 +326,49 @@ Example output:
 
 ```text
 Result correct.
-Kernel time : 3.14522 ms
-GFLOPS      : 682.778
+Kernel time : 2.1087 ms
+GFLOPS      : 1018.39
 ```
 
 ### Benchmark Results
 
 | Run | Kernel Time (ms) | GFLOPS |
 | --- | ---: | ---: |
-| 1 | 17.2467 | 124.515 |
-| 2 | 3.14522 | 682.778 |
-| 3 | 2.47514 | 867.622 |
-| 4 | 3.59658 | 597.091 |
-| 5 | 3.0903 | 694.910 |
-| 6 | 2.46333 | 871.781 |
+| 1 | 2.1087 | 1018.390 |
+| 2 | 2.1584 | 994.942 |
+| 3 | 1.87824 | 1143.350 |
+| 4 | 2.1345 | 1006.080 |
+| 5 | 1.87965 | 1142.490 |
+| 6 | 2.12195 | 1012.030 |
 
 Summary:
 
 | Metric | Value |
 | --- | ---: |
-| Average kernel time | 5.3362 ms |
-| Average throughput | 639.783 GFLOPS |
-| Fastest run | 2.46333 ms |
-| Slowest run | 17.2467 ms |
+| Average kernel time | 2.0469 ms |
+| Average throughput | 1052.880 GFLOPS |
+| Fastest run | 1.87824 ms |
+| Slowest run | 2.15840 ms |
 
-The first run was a warm-up outlier. The later runs are closer to the memory
-coalesced kernel, with the fastest shared-memory run slightly faster than the
-fastest memory-coalesced run.
+These runs were collected after rebuilding for the actual GPU architecture
+(`sm_89`) and excluding one warm-up launch. With that setup, the shared-memory
+kernel is clearly faster than the memory-coalesced kernel.
 
 ### Profiling
 
 Compiler resource command:
 
 ```bash
-nvcc -O3 -Xptxas=-v matmul_smem.cu -o matmul_smem
+nvcc -O3 -arch=sm_89 -Xptxas=-v matmul_smem.cu -o matmul_smem
 ```
 
 Compiler resource output:
 
 ```text
-ptxas info    : Compiling entry function '_Z11matmul_smemiiifPKfS0_fPf' for 'sm_52'
+ptxas info    : Compiling entry function '_Z11matmul_smemiiifPKfS0_fPf' for 'sm_89'
 ptxas info    : Function properties for _Z11matmul_smemiiifPKfS0_fPf
     0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
-ptxas info    : Used 28 registers, 8192 bytes smem, 368 bytes cmem[0]
+ptxas info    : Used 37 registers, 8192 bytes smem, 400 bytes cmem[0]
 ```
 
 The `8192 bytes smem` comes from two `32 x 32` float tiles:
@@ -387,11 +387,11 @@ Relevant Nsight Systems terminal output:
 
 ```text
 Result correct.
-Kernel time : 3.3281 ms
-GFLOPS      : 645.259
+Kernel time : 2.47856 ms
+GFLOPS      : 866.424
 Importer error status: The importer binary and its dependencies were not found.
 Unable to retrieve the importer version: skipping importation of the QDSTRM file.
-Generating '/tmp/nsys-report-6fe7.qdstrm'
+Generating '/tmp/nsys-report-9702.qdstrm'
 Generated:
     /home/totallynotsatnam/CS/GPU/matmul/matmul_smem_nsys.qdstrm
 ```
@@ -435,10 +435,10 @@ were blocked by the driver permission setting.
 | Block shape | `16 x 16` | `1024 x 1`, mapped to `32 x 32` | `1024 x 1`, mapped to `32 x 32` |
 | Threads per block | 256 | 1024 | 1024 |
 | Shared memory per block | 0 bytes | 0 bytes | 8192 bytes |
-| Average kernel time | 13.3099 ms | 2.8586 ms | 5.3362 ms |
-| Average throughput | 169.592 GFLOPS | 763.074 GFLOPS | 639.783 GFLOPS |
-| Fastest run | 10.2201 ms | 2.5423 ms | 2.46333 ms |
-| Slowest run | 19.9474 ms | 3.6273 ms | 17.2467 ms |
+| Average kernel time | 13.3099 ms | 2.8586 ms | 2.0469 ms |
+| Average throughput | 169.592 GFLOPS | 763.074 GFLOPS | 1052.880 GFLOPS |
+| Fastest run | 10.2201 ms | 2.5423 ms | 1.87824 ms |
+| Slowest run | 19.9474 ms | 3.6273 ms | 2.15840 ms |
 | Correctness | Passed | Passed | Passed |
 | Nsight Systems trace | `nsys_naive.qdstrm` | `mem_coal_nsys_exact.qdstrm` | `matmul_smem_nsys.qdstrm` |
 
@@ -448,14 +448,21 @@ Speedup:
 | --- | ---: |
 | Memory-coalesced average speedup over naive | 4.66x |
 | Memory-coalesced best-run speedup over naive | 4.02x |
-| Shared-memory average speedup over naive | 2.49x |
-| Shared-memory best-run speedup over naive | 4.15x |
+| Shared-memory average speedup over naive | 6.50x |
+| Shared-memory best-run speedup over naive | 5.44x |
+| Shared-memory average speedup over memory-coalesced | 1.40x |
+| Shared-memory best-run speedup over memory-coalesced | 1.35x |
 
 The memory-coalesced version is faster because adjacent threads access adjacent
 values of `B`, which makes global memory reads more GPU-friendly. The
-shared-memory version adds tile reuse, but this first tiled implementation still
-uses a very large block and gives each thread only one output element, so there
-is room to improve the scheduling and arithmetic intensity.
+shared-memory version adds tile reuse and is faster again, because each loaded
+tile value is reused across the block instead of repeatedly fetched from global
+memory.
+
+Read as a step-by-step progression: the memory-coalesced kernel is `4.66x`
+faster than the naive kernel on average. The shared-memory kernel is `1.40x`
+faster than the memory-coalesced kernel on average, and its fastest run is
+`1.35x` faster than the fastest memory-coalesced run.
 
 ## What This Teaches
 
