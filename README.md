@@ -281,40 +281,194 @@ Nsight Compute metrics to collect next:
 - The `1024` thread block size is large and may reduce scheduling flexibility.
 - No Tensor Core path yet.
 
+## Kernel 3: Shared-Memory Tiled GEMM
+
+File: [matmul_smem.cu](matmul_smem.cu)
+
+### Idea
+
+This kernel computes one `32 x 32` tile of `C` per CUDA block. It stages one
+tile of `A` and one tile of `B` into shared memory before doing the dot-product
+work.
+
+```cpp
+__shared__ float As[BLOCKSIZE * BLOCKSIZE];
+__shared__ float Bs[BLOCKSIZE * BLOCKSIZE];
+```
+
+Each block has `32 * 32 = 1024` threads in a 1D layout. The thread index is
+manually mapped into a tile row and column:
+
+```cpp
+const uint threadRow = threadIdx.x / BLOCKSIZE;
+const uint threadCol = threadIdx.x % BLOCKSIZE;
+```
+
+Each thread:
+
+1. Loads one element from `A` and one element from `B` into shared memory.
+2. Waits at `__syncthreads()` until the tile is fully loaded.
+3. Reuses the shared-memory tiles for `32` multiply-adds.
+4. Waits again before the next loop iteration overwrites shared memory.
+5. Writes one final result to `C`.
+
+This reduces repeated global memory traffic compared with the earlier kernels,
+because values in the staged tiles are reused by multiple threads in the block.
+
+### Build And Run
+
+```bash
+nvcc -O3 matmul_smem.cu -o matmul_smem
+./matmul_smem
+```
+
+Example output:
+
+```text
+Result correct.
+Kernel time : 3.14522 ms
+GFLOPS      : 682.778
+```
+
+### Benchmark Results
+
+| Run | Kernel Time (ms) | GFLOPS |
+| --- | ---: | ---: |
+| 1 | 17.2467 | 124.515 |
+| 2 | 3.14522 | 682.778 |
+| 3 | 2.47514 | 867.622 |
+| 4 | 3.59658 | 597.091 |
+| 5 | 3.0903 | 694.910 |
+| 6 | 2.46333 | 871.781 |
+
+Summary:
+
+| Metric | Value |
+| --- | ---: |
+| Average kernel time | 5.3362 ms |
+| Average throughput | 639.783 GFLOPS |
+| Fastest run | 2.46333 ms |
+| Slowest run | 17.2467 ms |
+
+The first run was a warm-up outlier. The later runs are closer to the memory
+coalesced kernel, with the fastest shared-memory run slightly faster than the
+fastest memory-coalesced run.
+
+### Profiling
+
+Compiler resource command:
+
+```bash
+nvcc -O3 -Xptxas=-v matmul_smem.cu -o matmul_smem
+```
+
+Compiler resource output:
+
+```text
+ptxas info    : Compiling entry function '_Z11matmul_smemiiifPKfS0_fPf' for 'sm_52'
+ptxas info    : Function properties for _Z11matmul_smemiiifPKfS0_fPf
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 28 registers, 8192 bytes smem, 368 bytes cmem[0]
+```
+
+The `8192 bytes smem` comes from two `32 x 32` float tiles:
+
+```text
+2 * 32 * 32 * 4 bytes = 8192 bytes
+```
+
+Nsight Systems command:
+
+```bash
+nsys profile --trace=cuda --force-overwrite=true -o matmul_smem_nsys ./matmul_smem
+```
+
+Relevant Nsight Systems terminal output:
+
+```text
+Result correct.
+Kernel time : 3.3281 ms
+GFLOPS      : 645.259
+Importer error status: The importer binary and its dependencies were not found.
+Unable to retrieve the importer version: skipping importation of the QDSTRM file.
+Generating '/tmp/nsys-report-6fe7.qdstrm'
+Generated:
+    /home/totallynotsatnam/CS/GPU/matmul/matmul_smem_nsys.qdstrm
+```
+
+Generated trace:
+
+```text
+matmul_smem_nsys.qdstrm
+```
+
+Nsight Compute command:
+
+```bash
+ncu --target-processes all --set full ./matmul_smem
+```
+
+Nsight Compute result:
+
+```text
+==ERROR== ERR_NVGPUCTRPERM - The user does not have permission to access NVIDIA GPU Performance Counters on the target device 0.
+==WARNING== No kernels were profiled.
+```
+
+The kernel ran correctly under Nsight Compute, but detailed hardware counters
+were blocked by the driver permission setting.
+
+### Bottleneck Notes
+
+- Shared memory tiling now reuses `A` and `B` values inside each block.
+- The kernel uses `8192` bytes of shared memory per block.
+- The `1024` thread block size is the hardware maximum and can limit scheduling flexibility.
+- There is no boundary handling yet, so `M`, `N`, and `K` must be multiples of `32`.
+- Each thread computes only one output element, so there is no register blocking yet.
+- No Tensor Core path yet.
+
 ## Kernel Comparison
 
-| Metric | Naive GEMM | Memory-Coalesced GEMM |
-| --- | --- | --- |
-| File | `naive.cu` | `mem_coal_#2.cu` |
-| Block shape | `16 x 16` | `1024 x 1`, mapped to `32 x 32` |
-| Threads per block | 256 | 1024 |
-| Average kernel time | 13.3099 ms | 2.8586 ms |
-| Average throughput | 169.592 GFLOPS | 763.074 GFLOPS |
-| Fastest run | 10.2201 ms | 2.5423 ms |
-| Slowest run | 19.9474 ms | 3.6273 ms |
-| Correctness | Passed | Passed |
-| Nsight Systems trace | `nsys_naive.qdstrm` | `mem_coal_nsys_exact.qdstrm` |
+| Metric | Naive GEMM | Memory-Coalesced GEMM | Shared-Memory Tiled GEMM |
+| --- | --- | --- | --- |
+| File | `naive.cu` | `mem_coal_#2.cu` | `matmul_smem.cu` |
+| Block shape | `16 x 16` | `1024 x 1`, mapped to `32 x 32` | `1024 x 1`, mapped to `32 x 32` |
+| Threads per block | 256 | 1024 | 1024 |
+| Shared memory per block | 0 bytes | 0 bytes | 8192 bytes |
+| Average kernel time | 13.3099 ms | 2.8586 ms | 5.3362 ms |
+| Average throughput | 169.592 GFLOPS | 763.074 GFLOPS | 639.783 GFLOPS |
+| Fastest run | 10.2201 ms | 2.5423 ms | 2.46333 ms |
+| Slowest run | 19.9474 ms | 3.6273 ms | 17.2467 ms |
+| Correctness | Passed | Passed | Passed |
+| Nsight Systems trace | `nsys_naive.qdstrm` | `mem_coal_nsys_exact.qdstrm` | `matmul_smem_nsys.qdstrm` |
 
 Speedup:
 
 | Comparison | Value |
 | --- | ---: |
-| Average speedup | 4.66x |
-| Best-run speedup | 4.02x |
+| Memory-coalesced average speedup over naive | 4.66x |
+| Memory-coalesced best-run speedup over naive | 4.02x |
+| Shared-memory average speedup over naive | 2.49x |
+| Shared-memory best-run speedup over naive | 4.15x |
 
-The memory-coalesced version is faster because adjacent threads access adjacent values of `B`, which makes global memory reads more GPU-friendly. It is still not a fully optimized GEMM because it does not reuse tiles through shared memory.
+The memory-coalesced version is faster because adjacent threads access adjacent
+values of `B`, which makes global memory reads more GPU-friendly. The
+shared-memory version adds tile reuse, but this first tiled implementation still
+uses a very large block and gives each thread only one output element, so there
+is room to improve the scheduling and arithmetic intensity.
 
 ## What This Teaches
 
 - Correctness is only the first step in CUDA.
 - Thread mapping changes memory behavior.
 - Coalescing can give a large speedup even before shared memory tiling.
+- Shared memory tiling can reduce global memory traffic, but the full kernel shape still matters.
 - Profiling needs to be structured per kernel, otherwise it becomes hard to compare results.
-- The next serious optimization is tiled GEMM using shared memory.
+- The next serious optimization is register blocking or warp tiling on top of shared memory.
 
 ## Future Improvements
 
-- Shared memory tiled GEMM
+- Boundary checks for non-multiple-of-32 matrix sizes
 - Register blocking
 - Warp tiling
 - WMMA / Tensor Core kernels
