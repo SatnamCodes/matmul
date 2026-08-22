@@ -1,12 +1,39 @@
 # CUDA GEMM Journey
 
-A small CUDA matrix multiplication project built step by step: first a readable naive GEMM kernel, then a memory-coalesced version that changes how threads map to output elements.
+**A from-scratch CUDA matrix multiplication (SGEMM) implementation, optimized step by step and benchmarked against cuBLAS, PyTorch, and CUTLASS.**
 
-The goal is not to beat cuBLAS yet. The goal is to understand how GPU performance changes when the math stays the same but the memory access pattern changes.
+This project is not an attempt to replace vendor GEMM libraries. It is a documented, iterative case study in GPU performance engineering: start from a correct-but-naive kernel, profile it with Nsight, find the actual bottleneck, fix that one thing, and measure the result — repeated across three kernel generations. Each step is backed by real hardware measurements (kernel timing, GFLOPS, Nsight Compute counters), not estimates.
+
+## Results At A Glance
+
+Every number below is `M = N = K = 1024`, `fp32`, measured on the hardware in [Benchmark Setup](#benchmark-setup). Full methodology and more sizes are in [Kernel Comparison](#kernel-comparison) and [Benchmarked Against Production Libraries](#benchmarked-against-production-libraries).
+
+| Implementation | Average Throughput | Speedup over naive |
+| --- | ---: | ---: |
+| Naive GEMM (this project) | 169.6 GFLOPS | 1.00x |
+| Memory-Coalesced GEMM (this project) | 763.1 GFLOPS | 4.66x |
+| Shared-Memory Tiled GEMM (this project) | 1052.9 GFLOPS | 6.50x |
+| CUTLASS (Python interface, untuned) | 739.1 GFLOPS | 4.36x |
+| PyTorch (`torch.matmul`) | 2657.3 GFLOPS | 15.67x |
+| cuBLAS (raw C++) | 6894.0 GFLOPS | 40.65x |
+
+Reading this table honestly: three kernel iterations closed a large fraction of the gap to a vendor library using only thread-mapping and shared-memory changes — no Tensor Cores, no autotuning. The remaining ~6.5x gap to cuBLAS is exactly what register blocking, warp tiling, and Tensor Core paths are for, which is where this project goes next (see [Future Improvements](#future-improvements)).
+
+## Table Of Contents
+
+- [GEMM Equation](#gemm-equation)
+- [Benchmark Setup](#benchmark-setup)
+- [Kernel 1: Naive GEMM](#kernel-1-naive-gemm)
+- [Kernel 2: Memory-Coalesced GEMM](#kernel-2-memory-coalesced-gemm)
+- [Kernel 3: Shared-Memory Tiled GEMM](#kernel-3-shared-memory-tiled-gemm)
+- [Kernel Comparison](#kernel-comparison)
+- [Benchmarked Against Production Libraries](#benchmarked-against-production-libraries)
+- [What This Teaches](#what-this-teaches)
+- [Future Improvements](#future-improvements)
 
 ## GEMM Equation
 
-Both kernels compute:
+All kernels compute:
 
 $$
 C = \alpha AB + \beta C
@@ -161,23 +188,6 @@ For threads `0..31` in a warp:
 - `C[x * N + y]` becomes a coalesced write
 
 The math is still simple, but the memory access pattern is better.
-
-## Short Manim Explainer
-
-File: [side_by_side_kernels_manim.py](side_by_side_kernels_manim.py)
-
-This is a compact, under-one-minute beginner animation that puts both kernels
-side by side:
-
-- naive mapping: warp lanes touch strided rows of `C`
-- coalesced mapping: warp lanes touch neighboring columns of `C`
-- takeaway: same GEMM math, better memory access pattern
-
-Render it with:
-
-```bash
-manim -pql side_by_side_kernels_manim.py SideBySideKernels
-```
 
 ### Build And Run
 
@@ -464,6 +474,75 @@ faster than the naive kernel on average. The shared-memory kernel is `1.40x`
 faster than the memory-coalesced kernel on average, and its fastest run is
 `1.35x` faster than the fastest memory-coalesced run.
 
+## Benchmarked Against Production Libraries
+
+To put the kernel progression above in context, the naive kernel is benchmarked
+against three production GEMM implementations: raw **cuBLAS**, **PyTorch**
+(`torch.matmul`, which itself dispatches to cuBLAS/cuBLASLt), and **CUTLASS**
+(NVIDIA's open-source template GEMM library, via its Python interface). This
+answers the question the three kernels above don't: *how far is "correct and
+reasonably optimized by hand" from what the vendor libraries actually achieve?*
+
+Code: [benchmark/bench_cuda.cu](benchmark/bench_cuda.cu) (naive + cuBLAS, C++/CUDA),
+[benchmark/bench_python.py](benchmark/bench_python.py) (PyTorch + CUTLASS),
+[benchmark/plot_results.py](benchmark/plot_results.py) (chart generation).
+
+### Methodology
+
+- Square matrices, `fp32`, `M = N = K ∈ {256, 512, 1024, 2048, 4096}`.
+- Inputs initialized to `1.0f`; every output element must equal `K` — a correctness
+  check that is cheap to run at every size, not just `N = 1024`.
+- 3 warm-up launches, then 10 timed launches averaged per (implementation, size) pair.
+- CUDA/C++ paths timed with `cudaEvent`; PyTorch/CUTLASS timed with `torch.cuda.Event`.
+- GPU and driver are the same as [Benchmark Setup](#benchmark-setup).
+
+### Results
+
+![SGEMM throughput comparison: naive kernel vs cuBLAS vs PyTorch vs CUTLASS](benchmark/results.png)
+
+| Implementation | 256 | 512 | 1024 | 2048 | 4096 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Naive GEMM (this project) | 157.6 | 165.0 | 168.0 | 234.9 | 172.6 |
+| CUTLASS (Python interface) | 17.3 | 134.6 | 739.1 | 2796.7 | 4750.4 |
+| PyTorch (`torch.matmul`) | 1218.1 | 2275.6 | 2657.3 | 2654.0 | 3046.1 |
+| cuBLAS (raw C++) | 2874.4 | 5625.4 | 6894.0 | 9722.5 | 6153.6 |
+
+_All values in GFLOPS. Raw CSVs: [benchmark/results_cuda.csv](benchmark/results_cuda.csv), [benchmark/results_python.csv](benchmark/results_python.csv)._
+
+### Reading The Comparison
+
+- **cuBLAS wins at every size**, peaking near 9.7 TFLOPS at `N = 2048` — that's the
+  ceiling this project's hand-written kernels are working toward.
+- **The naive kernel is flat** at ~150–230 GFLOPS regardless of size, because it's
+  fully memory-bound and never reuses a loaded value. This matches the standalone
+  naive-kernel numbers in [Kernel 1](#kernel-1-naive-gemm) — the benchmark harness
+  reproduces the project's own numbers, which is itself a useful sanity check.
+- **PyTorch trails raw cuBLAS by roughly 2x** at large sizes even though it calls
+  into the same underlying library. That gap is real framework dispatch overhead,
+  not a flaw in this benchmark.
+- **CUTLASS looks worse than the naive kernel at `N = 256`, then jumps past PyTorch
+  by `N = 4096`.** This isn't the CUTLASS kernel being slow — it's the stock Python
+  interface (`cutlass_cppgen`) re-marshaling arguments in Python on every call, so
+  Python dispatch overhead dominates when the GPU work itself is small. At large
+  `N` the GPU work outweighs that overhead and the underlying kernel's real
+  throughput shows through. A tuned, per-shape CUTLASS kernel (via the CUTLASS
+  profiler's autotuning) would be a fairer ceiling — see [Future Improvements](#future-improvements).
+
+### Reproducing These Results
+
+```bash
+# naive kernel + cuBLAS (C++/CUDA)
+nvcc -O3 -arch=sm_89 benchmark/bench_cuda.cu -lcublas -o benchmark/bench_cuda
+./benchmark/bench_cuda > benchmark/results_cuda.csv
+
+# PyTorch + CUTLASS (Python)
+.venv/bin/pip install torch nvidia-cutlass "cuda-python==12.9.7" matplotlib
+.venv/bin/python benchmark/bench_python.py > benchmark/results_python.csv
+
+# chart
+.venv/bin/python benchmark/plot_results.py
+```
+
 ## What This Teaches
 
 - Correctness is only the first step in CUDA.
@@ -471,6 +550,7 @@ faster than the memory-coalesced kernel on average, and its fastest run is
 - Coalescing can give a large speedup even before shared memory tiling.
 - Shared memory tiling can reduce global memory traffic, but the full kernel shape still matters.
 - Profiling needs to be structured per kernel, otherwise it becomes hard to compare results.
+- Benchmarking against production libraries turns "faster than before" into "this many x from the actual ceiling," which is a much more honest way to track progress.
 - The next serious optimization is register blocking or warp tiling on top of shared memory.
 
 ## Future Improvements
@@ -479,6 +559,6 @@ faster than the memory-coalesced kernel on average, and its fastest run is
 - Register blocking
 - Warp tiling
 - WMMA / Tensor Core kernels
-- Benchmark against cuBLAS
 - Mixed precision support
+- Autotuned CUTLASS comparison (CUTLASS profiler, per-shape kernel selection) for a fairer library ceiling than the stock Python interface
 - Cleaner Nsight Compute side-by-side table after collecting full counter output for both kernels
