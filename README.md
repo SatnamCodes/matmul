@@ -15,9 +15,9 @@ Every number below is `M = N = K = 1024`, `fp32`, measured on the hardware in [B
 | Shared-Memory Tiled GEMM (this project) | 1052.9 GFLOPS | 6.50x |
 | CUTLASS (Python interface, untuned) | 739.1 GFLOPS | 4.36x |
 | PyTorch (`torch.matmul`) | 2657.3 GFLOPS | 15.67x |
-| cuBLAS (raw C++) | 6894.0 GFLOPS | 40.65x |
+| cuBLAS (raw C++) | 8322.0 GFLOPS | 49.07x |
 
-Reading this table honestly: three kernel iterations closed a large fraction of the gap to a vendor library using only thread-mapping and shared-memory changes — no Tensor Cores, no autotuning. The remaining ~6.5x gap to cuBLAS is exactly what register blocking, warp tiling, and Tensor Core paths are for, which is where this project goes next (see [Future Improvements](#future-improvements)).
+Reading this table honestly: three kernel iterations closed a large fraction of the gap to a vendor library using only thread-mapping and shared-memory changes — no Tensor Cores, no autotuning. The remaining ~7.9x gap to cuBLAS is exactly what register blocking, warp tiling, and Tensor Core paths are for, which is where this project goes next (see [Future Improvements](#future-improvements)).
 
 ## Table Of Contents
 
@@ -86,9 +86,14 @@ This is easy to understand, but it does not try to optimize global memory access
 ### Build And Run
 
 ```bash
-nvcc -O3 naive.cu -o naive
+nvcc -O3 -arch=sm_89 naive.cu -lcublas -o naive
 ./naive
 ```
+
+`-lcublas` is only needed because this file also has a `--sweep` mode that
+benchmarks against cuBLAS — see [Benchmarked Against Production Libraries](#benchmarked-against-production-libraries).
+The default invocation above (no arguments) is unaffected and still runs
+exactly this one kernel at `M=N=K=1024`.
 
 Example output:
 
@@ -483,7 +488,9 @@ against three production GEMM implementations: raw **cuBLAS**, **PyTorch**
 answers the question the three kernels above don't: *how far is "correct and
 reasonably optimized by hand" from what the vendor libraries actually achieve?*
 
-Code: [benchmark/bench_cuda.cu](benchmark/bench_cuda.cu) (naive + cuBLAS, C++/CUDA),
+Code: `naive.cu` itself, run as `./naive --sweep` (naive + cuBLAS, C++/CUDA —
+no separate benchmark binary, so the kernel being measured is exactly the
+kernel documented in [Kernel 1](#kernel-1-naive-gemm)),
 [benchmark/bench_python.py](benchmark/bench_python.py) (PyTorch + CUTLASS),
 [benchmark/plot_results.py](benchmark/plot_results.py) (chart generation).
 
@@ -502,24 +509,28 @@ Code: [benchmark/bench_cuda.cu](benchmark/bench_cuda.cu) (naive + cuBLAS, C++/CU
 
 | Implementation | 256 | 512 | 1024 | 2048 | 4096 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Naive GEMM (this project) | 157.6 | 165.0 | 168.0 | 234.9 | 172.6 |
+| Naive GEMM (this project) | 122.0 | 141.1 | 164.4 | 196.6 | 181.3 |
 | CUTLASS (Python interface) | 17.3 | 134.6 | 739.1 | 2796.7 | 4750.4 |
 | PyTorch (`torch.matmul`) | 1218.1 | 2275.6 | 2657.3 | 2654.0 | 3046.1 |
-| cuBLAS (raw C++) | 2874.4 | 5625.4 | 6894.0 | 9722.5 | 6153.6 |
+| cuBLAS (raw C++) | 2902.2 | 5614.5 | 8322.0 | 7497.2 | 6433.8 |
 
 _All values in GFLOPS. Raw CSVs: [benchmark/results_cuda.csv](benchmark/results_cuda.csv), [benchmark/results_python.csv](benchmark/results_python.csv)._
 
 ### Reading The Comparison
 
-- **cuBLAS wins at every size**, peaking near 9.7 TFLOPS at `N = 2048` — that's the
-  ceiling this project's hand-written kernels are working toward.
-- **The naive kernel is flat** at ~150–230 GFLOPS regardless of size, because it's
-  fully memory-bound and never reuses a loaded value. This matches the standalone
-  naive-kernel numbers in [Kernel 1](#kernel-1-naive-gemm) — the benchmark harness
-  reproduces the project's own numbers, which is itself a useful sanity check.
-- **PyTorch trails raw cuBLAS by roughly 2x** at large sizes even though it calls
-  into the same underlying library. That gap is real framework dispatch overhead,
-  not a flaw in this benchmark.
+- **cuBLAS wins at every size**, peaking at ~8.3 TFLOPS at `N = 1024` on this run
+  — that's the ceiling this project's hand-written kernels are working toward.
+  cuBLAS's own numbers move by a few TFLOPS between runs (laptop GPU thermals
+  and clock boost are not perfectly repeatable); the naive kernel's much lower
+  throughput is comparatively stable run to run.
+- **The naive kernel is flat** at ~120–200 GFLOPS regardless of size, because it's
+  fully memory-bound and never reuses a loaded value. This is the same kernel
+  and the same order of magnitude as the standalone benchmark in
+  [Kernel 1](#kernel-1-naive-gemm) — run-to-run hardware variance accounts for
+  the rest of the difference from that section's recorded 169.6 GFLOPS average.
+- **PyTorch trails raw cuBLAS** at every size even though it calls into the same
+  underlying library — that gap is real framework dispatch overhead, not a flaw
+  in this benchmark.
 - **CUTLASS looks worse than the naive kernel at `N = 256`, then jumps past PyTorch
   by `N = 4096`.** This isn't the CUTLASS kernel being slow — it's the stock Python
   interface (`cutlass_cppgen`) re-marshaling arguments in Python on every call, so
@@ -531,9 +542,9 @@ _All values in GFLOPS. Raw CSVs: [benchmark/results_cuda.csv](benchmark/results_
 ### Reproducing These Results
 
 ```bash
-# naive kernel + cuBLAS (C++/CUDA)
-nvcc -O3 -arch=sm_89 benchmark/bench_cuda.cu -lcublas -o benchmark/bench_cuda
-./benchmark/bench_cuda > benchmark/results_cuda.csv
+# naive kernel + cuBLAS (C++/CUDA) — same naive.cu as Kernel 1, sweep mode
+nvcc -O3 -arch=sm_89 naive.cu -lcublas -o naive
+./naive --sweep > benchmark/results_cuda.csv
 
 # PyTorch + CUTLASS (Python)
 .venv/bin/pip install torch nvidia-cutlass "cuda-python==12.9.7" matplotlib
